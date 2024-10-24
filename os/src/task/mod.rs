@@ -14,9 +14,13 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
+
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+//use crate::syscall;
+use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -54,9 +58,12 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_times:[0; MAX_SYSCALL_NUM],
+            task_start_time: 0,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
+            task.task_start_time = get_time_ms();
             task.task_status = TaskStatus::Ready;
         }
         TaskManager {
@@ -135,6 +142,31 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    fn syscall_counter(&self, syscall_id: usize){
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] +=1;
+    }
+    
+    fn  get_syscall_times(&self) -> [u32; MAX_SYSCALL_NUM]{
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times.clone()
+    }
+
+    fn get_task_runtime(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let start_time = inner.tasks[current].task_start_time;
+        get_time_ms()-start_time
+    }
+
+    fn get_task_status(&self) -> TaskStatus{
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_status
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +200,25 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// System call plus one
+pub fn syscall_counter(syscall_id: usize) {
+    TASK_MANAGER.syscall_counter(syscall_id);
+}
+
+
+/// Get syscall tiems
+pub fn get_syscall_times() -> [u32; MAX_SYSCALL_NUM]{
+    TASK_MANAGER.get_syscall_times()
+}
+
+/// Get run time
+pub fn get_task_runtime() -> usize {
+    TASK_MANAGER.get_task_runtime()
+}
+
+/// Get task status
+pub fn get_task_status() ->TaskStatus {
+    TASK_MANAGER.get_task_status()
 }
